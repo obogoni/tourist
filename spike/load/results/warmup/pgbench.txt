@@ -1,0 +1,63 @@
+pgbench (17.10 (Debian 17.10-1.pgdg13+1))
+transaction type: multiple scripts
+scaling factor: 1
+query mode: prepared
+number of clients: 32
+number of threads: 4
+maximum number of tries: 1
+duration: 60 s
+number of transactions actually processed: 90087
+number of failed transactions: 0 (0.000%)
+latency average = 1.070 ms
+latency stddev = 0.427 ms
+rate limit schedule lag: avg 0.077 (max 2.083) ms
+initial connection time = 25.129 ms
+tps = 1501.678005 (without initial connection time)
+SQL script 1: /bench/payment.sql
+ - weight: 60 (targets 60.0% of total)
+ - 54206 transactions (60.2% of total, tps = 903.570525)
+ - number of failed transactions: 0 (0.000%)
+ - latency average = 1.085 ms
+ - latency stddev = 0.400 ms
+SQL script 2: /bench/topup.sql
+ - weight: 22 (targets 22.0% of total)
+ - 19685 transactions (21.9% of total, tps = 328.133155)
+ - number of failed transactions: 0 (0.000%)
+ - latency average = 1.063 ms
+ - latency stddev = 0.390 ms
+SQL script 3: /bench/transfer.sql
+ - weight: 5 (targets 5.0% of total)
+ - 4460 transactions (5.0% of total, tps = 74.344621)
+ - number of failed transactions: 0 (0.000%)
+ - latency average = 1.159 ms
+ - latency stddev = 0.361 ms
+SQL script 4: /bench/reversal.sql
+ - weight: 4 (targets 4.0% of total)
+ - 3661 transactions (4.1% of total, tps = 61.025932)
+ - number of failed transactions: 0 (0.000%)
+ - latency average = 1.474 ms
+ - latency stddev = 0.551 ms
+SQL script 5: /bench/retry.sql
+ - weight: 5 (targets 5.0% of total)
+ - 4489 transactions (5.0% of total, tps = 74.828028)
+ - number of failed transactions: 0 (0.000%)
+ - latency average = 0.492 ms
+ - latency stddev = 0.287 ms
+SQL script 6: /bench/dup.sql
+ - weight: 2 (targets 2.0% of total)
+ - 1828 transactions (2.0% of total, tps = 30.471293)
+ - number of failed transactions: 0 (0.000%)
+ - latency average = 1.071 ms
+ - latency stddev = 0.349 ms
+SQL script 7: /bench/race_payment.sql
+ - weight: 1 (targets 1.0% of total)
+ - 869 transactions (1.0% of total, tps = 14.485533)
+ - number of failed transactions: 0 (0.000%)
+ - latency average = 1.123 ms
+ - latency stddev = 0.375 ms
+SQL script 8: /bench/race_topup.sql
+ - weight: 1 (targets 1.0% of total)
+ - 883 transactions (1.0% of total, tps = 14.718901)
+ - number of failed transactions: 0 (0.000%)
+ - latency average = 1.075 ms
+ - latency stddev = 0.425 ms

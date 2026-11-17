@@ -1,0 +1,18 @@
+Timing is on.
+step 1: wallet balances
+NOTICE:  archived balances of 287577 wallets, 7.3 s
+CALL
+Time: 7314.229 ms (00:07.314)
+step 2: counterpart totals
+CALL
+Time: 736.306 ms
+step 3: detach
+ALTER TABLE
+Time: 14.416 ms
+ALTER TABLE
+Time: 4.768 ms
+step 4: drop
+DROP TABLE
+Time: 103.975 ms
+DROP TABLE
+Time: 32.907 ms

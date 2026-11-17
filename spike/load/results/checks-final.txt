@@ -1,0 +1,12 @@
+                    invariant                    | violations 
+ 1a balance below -credit_limit (wallet)         |          0
+ 1b balance below -credit_limit (any entry)      |          0
+ 2a seq gap or duplicate                         |          0
+ 2b balance_after does not chain                 |          0
+ 3 archived_balance + entries <> balance         |          0
+ 4a operation entries do not sum to zero         |          0
+ 4b operation with wrong number of entries       |          0
+ 5 customer does not sum to zero                 |          0
+ 6a operation reversed more than once            |          0
+ 6b reversal link not mutual                     |          0
+ 6c idempotency key with more than one operation |          0

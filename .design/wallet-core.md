@@ -3,8 +3,8 @@
 | | |
 |---|---|
 | **Status** | confirmed by obogoni (author and owner of this study), 2026-10-05, first recorded in issue #1 |
-| **Ready to plan?** | No slice is clear yet. TopUp is the load spike (#3), which picks the database and may change the model; the other seven wait on it, and Closing also on how refundable balance works. Every contract waits on the Core API, not yet designed. See Open. |
-| **Review** | when the load spike (#3) closes - obogoni (author) |
+| **Ready to plan?** | Yes for the model: the load spike (#3) chose PostgreSQL 17 and kept the model, with the archive additions in D7. Closing still waits on how refundable balance works. Every contract waits on the Core API, not yet designed. See Open. |
+| **Review** | load spike (#3) results recorded 2026-11-17; next review when the Core API RFC is drafted - obogoni (author) |
 
 **How to read.** From Summary to Open is the design the team aligns on. Slices cuts the work: one section per slice, with its rules, its contract and the data that matters. The spec of each feature starts from its slice and details the rest against the code.
 
@@ -41,7 +41,7 @@ A system design study: the core of a SaaS digital wallet for theme parks and clu
 | p99 minute | 103/min | ~172/s | 8× the average |
 | Organic peak minute | 871/min | ~1,450/s | 71× the average: sizing by the average is off by two orders of magnitude |
 | Maximum minute (batch) | 3,207/min | ~5,345/s | |
-| Maximum second (batch) | 76/s | ~7,600/s | The largest peaks are batches touching 1 to 5 accounts |
+| Maximum second (batch) | 76/s | ~7,600/s | The largest peaks are batches touching 1 to 5 accounts. Not a target: it assumes every customer's batch lands in the same second, and no business need asks for it |
 | Wallets with movements in 24 months | 1.13 million | 113 million | p50 of 6 movements and 1 day of use per wallet |
 | Wallets active on the peak day | 17.6k | 1.76 million | |
 
@@ -54,11 +54,11 @@ What the data says about the design:
 
 ## How we will know it worked
 
-| What to watch | Target | How to measure |
-|---|---|---|
-| Write throughput on one database node | 1,500 operations/s (~3,000 entry rows/s) sustained, p99 ≤ 300 ms on payment, bursts of 7,600/s for 10 s | Load generator of the spike (#3) |
-| Invariant violations under that load | 0 for every invariant in [Invariants](#invariants) | Invariant checks run by the spike (#3) |
-| The document as an interview script | Walked through in 45 to 60 minutes | Timed dry run by the author |
+| What to watch | Target | How to measure | Measured (#3, 2026-11-17) |
+|---|---|---|---|
+| Write throughput on one database node | 1,500 operations/s (~3,000 entry rows/s) sustained, p99 ≤ 300 ms on payment | Load generator of the spike (#3) | 1,500/s for 5 min at payment p99 **1.8 ms**. Ceiling ~7,650/s at 12–24 connections, about 5× headroom, on a laptop that also runs the load generator |
+| Invariant violations under that load | 0 for every invariant in [Invariants](#invariants) | Invariant checks run by the spike (#3) | **0** after every scenario, including a dropped month |
+| The document as an interview script | Walked through in 45 to 60 minutes | Timed dry run by the author | not yet |
 
 **Signs it is going wrong:**
 
@@ -82,6 +82,7 @@ What the data says about the design:
 | Vouchers, all-inclusive, item rental | Move no money (D6); get their own structure later |
 | Paying one sale with several wallets | The integrator pays once per wallet and reverses the earlier ones if one fails |
 | Batch activation | Each wallet is one call; bulk loads are rate-limited per customer |
+| Batch bursts (7,600/s at 100×) | Not a business need; batches are rate-limited per customer like bulk loads. Dropped 2026-11-17 |
 | Group closing, debt collection, balance expiry, partial reversal, refund fee | Not part of this study |
 | KYC, anti-fraud, top-up payment processor, notifications, cash register, tax invoicing, reports | Outside the wallet core |
 | API contracts, availability, replicas, failover | Next blocks of the roadmap: Core API RFC and high-level design |
@@ -153,12 +154,13 @@ erDiagram
 |---|---|---|---|
 | `tenant` | A customer (park or club), with time zone and refund rules | new | [Wallet](#wallet) |
 | `payment_method` | How a customer accepts top-ups, and whether that money is refundable | new | [Wallet](#wallet) |
-| `ledger_account` | Counterpart accounts per customer: `cash` and `refunds_paid` per method, one `revenue` | new | [Wallet](#wallet) |
+| `ledger_account` | Counterpart accounts per customer: `cash` and `refunds_paid` per method, one `revenue`; `archived_total` of archived months | new | [Wallet](#wallet) |
 | `wallet` | The visitor's account, with its stored balance and limits | new | [Wallet](#wallet) |
 | `wallet_credential` | Card, wristband or QR code bound to a wallet for a period | new | [Wallet](#wallet) |
 | `operation` | One business operation and its request | new | [TopUp](#topup) |
 | `entry` | One immutable leg of an operation on one account | new | [TopUp](#topup) |
 | `idempotency_key` | Request key per customer, kept 30 days | new | [TopUp](#topup) |
+| `archive_state` | Where the online window starts (`online_from`), one row per database | new | [Archive](#archive) |
 
 ### How each operation posts
 
@@ -178,9 +180,9 @@ A postpaid wallet below zero is the customer's receivable and needs no account o
 
 1. A wallet's balance never goes below `-credit_limit`.
 2. A wallet's entries have `seq` 1, 2, 3… with no gap or duplicate, and each `balance_after` equals the previous one plus `amount`.
-3. `wallet.archived_balance` (the balance at the last archived entry, D7) plus the sum of the wallet's online entries equals `wallet.balance`.
+3. `wallet.archived_balance` (the balance at the last archived entry, D7) plus the sum of the wallet's entries with `seq > archived_seq` equals `wallet.balance`.
 4. Each operation's entries sum to zero.
-5. Per customer, wallet balances plus counterpart entries sum to zero.
+5. Per customer, wallet balances plus counterpart entries since `online_from` plus counterpart `archived_total` sum to zero.
 6. An operation is reversed at most once, and an idempotency key maps to one operation.
 
 ### Vocabulary
@@ -251,6 +253,8 @@ These are the decisions every slice builds on; slices cite them by code. Not all
 
 **Consequence.** Gaps and duplicates in a statement are detectable. A sequence on a counterpart would make it a hot row.
 
+**Careful.** As with D4, a unique index on the partitioned `entry` must include `created_at`, so "unique per account" is kept by the wallet row lock and checked by invariant 2, not enforced by a constraint. Counterpart order by `entry_id` is approximate: ids are not in commit order across sessions.
+
 ### D6 — Ledger holds only money
 
 **Rule.** Zero-value movements are never written to `entry`.
@@ -259,9 +263,9 @@ These are the decisions every slice builds on; slices cite them by code. Not all
 
 ### D7 — Two years online, monthly
 
-**Rule.** `entry` and `operation` are partitioned by month of creation, 24 months online. Archiving a month records each touched wallet's last archived balance and `seq` on the wallet (`archived_balance`, `archived_seq`).
+**Rule.** `entry` and `operation` are partitioned by month of creation, 24 months online. Archiving a month records each touched wallet's last archived balance and `seq` on the wallet (`archived_balance`, `archived_seq`). Then, in one transaction, it adds the month's counterpart entries to `ledger_account.archived_total` and moves `archive_state.online_from`. Only then are the partitions detached and dropped.
 
-**Consequence.** Invariant 3 stays checkable after archiving, with one write per touched wallet instead of a row per wallet per month.
+**Consequence.** Invariants 3 and 5 stay checkable after archiving, with one write per touched wallet and per counterpart account instead of a row per account per month. The wallet boundary is by `seq`, not by partition: `created_at` is the transaction start, so at a month boundary a wallet's `seq` order and its partitions can disagree. `archived_total` is written only by the archive job, so D2 holds on the write path.
 
 ### D8 — One customer, one database
 
@@ -275,7 +279,7 @@ What needs somebody before this can ship, each with an owner.
 
 | Item | Where it stands | Blocks | Where |
 |---|---|---|---|
-| Load spike (#3): database choice, schema and write path at 1,500 operations/s | spike - obogoni (author) | the spec of every slice | [TopUp](#topup) |
+| Reversal probes every online partition to find its original | measured fine with 4 partitions (p99 2.9 ms), not with 24; month hint or month-encoded id if it shows - obogoni (author) | the spec of Reversal | [Reversal](#reversal) |
 | Core API: operation contracts, errors, idempotency headers | rfc - not decided, obogoni (author) | the spec of every slice | [Slices](#slices) |
 | Refundable balance: which `refunds_paid` method a refund uses when the wallet was topped up with several | rfc - not decided, obogoni (author) | the spec of Closing | [Closing](#closing) |
 | Read rate | assumed 2 reads per write; the reference product does not record reads - obogoni (author) | nothing in this document; it sizes the high-level design | [Statement](#statement) |
@@ -284,14 +288,14 @@ What needs somebody before this can ship, each with an owner.
 
 | Slice | Delivers | Status |
 |---|---|---|
-| [Wallet](#wallet) | Customers, payment methods, counterpart accounts; activation, credentials, block and unblock | blocked by Load spike (#3) |
-| [TopUp](#topup) | The posting primitive and the first operation that writes it | spike |
-| [Payment](#payment) | Debit at a point of sale under credit limit, daily limit and PIN | blocked by Load spike (#3) |
-| [Reversal](#reversal) | Full reversal of a top-up or payment, once | blocked by Load spike (#3) |
-| [Transfer](#transfer) | Moving balance between two wallets of one customer | blocked by Load spike (#3) |
-| [Closing](#closing) | Balance refund, settling and deactivating a wallet | blocked by Load spike (#3), Refundable balance |
-| [Statement](#statement) | Balance and paged statement for 2 years | blocked by Load spike (#3) |
-| [Archive](#archive) | Monthly partitions leave the database without breaking invariant 3 | blocked by Load spike (#3) |
+| [Wallet](#wallet) | Customers, payment methods, counterpart accounts; activation, credentials, block and unblock | ready to specify |
+| [TopUp](#topup) | The posting primitive and the first operation that writes it | ready to specify |
+| [Payment](#payment) | Debit at a point of sale under credit limit, daily limit and PIN | ready to specify |
+| [Reversal](#reversal) | Full reversal of a top-up or payment, once | ready to specify |
+| [Transfer](#transfer) | Moving balance between two wallets of one customer | ready to specify |
+| [Closing](#closing) | Balance refund, settling and deactivating a wallet | blocked by Refundable balance |
+| [Statement](#statement) | Balance and paged statement for 2 years | ready to specify |
+| [Archive](#archive) | Monthly partitions leave the database without breaking invariant 3 | ready to specify |
 
 **Order:** Wallet → TopUp → Payment → Reversal → Transfer → Closing → Statement → Archive. After TopUp, Payment, Transfer, Closing and Statement can run in parallel. Every slice also waits on the Core API RFC for its contract.
 
@@ -302,7 +306,7 @@ What needs somebody before this can ship, each with an owner.
 ### Wallet
 
 > **Delivers:** the accounts a customer's money moves between, and the visitor's wallet bound to a credential.
-> **Status:** blocked by Load spike (#3) · **Applies:** D2 (Balance stored on wallets only), D8 (One customer, one database) · **Depends on:** nothing
+> **Status:** ready to specify · **Applies:** D2 (Balance stored on wallets only), D8 (One customer, one database) · **Depends on:** nothing
 
 **Behaviour**
 
@@ -330,7 +334,7 @@ What needs somebody before this can ship, each with an owner.
 ### TopUp
 
 > **Delivers:** `operation`, `entry` and `idempotency_key`, written by the first operation that credits a wallet.
-> **Status:** spike · **Applies:** D1 (Double-entry ledger), D2 (Balance stored on wallets only), D4 (Exactly once), D5 (Gapless wallet sequence), D6 (Ledger holds only money) · **Depends on:** Wallet
+> **Status:** ready to specify · **Applies:** D1 (Double-entry ledger), D2 (Balance stored on wallets only), D4 (Exactly once), D5 (Gapless wallet sequence), D6 (Ledger holds only money) · **Depends on:** Wallet
 
 **Behaviour**
 
@@ -362,14 +366,24 @@ What needs somebody before this can ship, each with an owner.
 
 **Spike**
 
-- Load spike (#3): does one database node sustain 1,500 operations/s with p99 ≤ 300 ms and zero invariant violations? Sustains it: the model stays. Sustains the peak but not the burst: per-customer admission control. Does not sustain it: revisit the write path, spread customers across more databases, or change the storage. Any violation: fix the model before the API. Stops when the database is chosen and the numbers exist, or after 3 days.
+- Load spike (#3), done 2026-11-17. Schema, write path, load generator and full results are in `spike/load/` (see its README).
+  - **Database:** PostgreSQL 17. TigerBeetle was discarded: it does the limit check and idempotent ids natively, but has no place for the stored response, the per-wallet `seq`, per-customer keys that expire, or dropping a month, so an operation would span two databases.
+  - **Outcome: sustains it with headroom.** The model stays as it is. The 7,600/s burst was dropped as a target (see Scope); its runs stay in the spike's README as measurements.
+  - Sustained 1,500/s: payment p50 1.0 ms, p99 1.8 ms. The ceiling is ~7,650/s at 12–24 connections and falls to ~6,300/s at 64, on one laptop CPU shared with the load generator.
+  - Batch wallet at 70 writes/s: p99 2.0 ms; a lock waiter in 0.1% of samples. Coalescing (D3's alternative) is not needed.
+  - Race on 20 wallets at the limit, and 141k in-flight duplicate keys: no balance beyond the limit, no double operation.
+  - Pruning one day of keys (1.8M) by batched `DELETE`: 12.6 s, payment p99 2.5 ms during. The daily-partition alternative is not needed.
+  - Dropping a month (287k wallets touched): 8.2 s, payment p99 2.5 ms during.
+  - Idempotency across the month boundary: the retry gets the original response.
+  - Invariants: 0 violations.
+  - Changed by the spike: counterpart `archived_total` and `archive_state` (D7), invariants 3 and 5 reworded, D5's Careful, `CACHE 100` on id sequences.
 
 ---
 
 ### Payment
 
 > **Delivers:** debit at a point of sale.
-> **Status:** blocked by Load spike (#3) · **Applies:** D1 (Double-entry ledger), D2 (Balance stored on wallets only), D3 (Limit checked in one atomic write), D4 (Exactly once), D6 (Ledger holds only money) · **Depends on:** TopUp
+> **Status:** ready to specify · **Applies:** D1 (Double-entry ledger), D2 (Balance stored on wallets only), D3 (Limit checked in one atomic write), D4 (Exactly once), D6 (Ledger holds only money) · **Depends on:** TopUp
 
 **Behaviour**
 
@@ -380,7 +394,7 @@ What needs somebody before this can ship, each with an owner.
 | Two payments race near the limit | At most one succeeds; the balance never crosses the limit |
 | Above `daily_limit` for today | Rejected |
 | Above `max_without_password` without a valid PIN | Rejected |
-| 70 writes/s on one batch wallet | Accepted in order; the spike measures lock wait |
+| 70 writes/s on one batch wallet | Accepted in order; p99 2.0 ms with lock wait negligible (#3) |
 
 **Alternatives considered**
 
@@ -395,7 +409,7 @@ What needs somebody before this can ship, each with an owner.
 ### Reversal
 
 > **Delivers:** full reversal of a completed top-up or payment.
-> **Status:** blocked by Load spike (#3) · **Applies:** D1 (Double-entry ledger), D3 (Limit checked in one atomic write), D4 (Exactly once) · **Depends on:** Payment
+> **Status:** ready to specify · **Applies:** D1 (Double-entry ledger), D3 (Limit checked in one atomic write), D4 (Exactly once) · **Depends on:** Payment
 
 **Behaviour**
 
@@ -411,7 +425,7 @@ What needs somebody before this can ship, each with an owner.
 ### Transfer
 
 > **Delivers:** balance moved between two wallets of one customer.
-> **Status:** blocked by Load spike (#3) · **Applies:** D1 (Double-entry ledger), D2 (Balance stored on wallets only), D3 (Limit checked in one atomic write), D4 (Exactly once), D8 (One customer, one database) · **Depends on:** TopUp
+> **Status:** ready to specify · **Applies:** D1 (Double-entry ledger), D2 (Balance stored on wallets only), D3 (Limit checked in one atomic write), D4 (Exactly once), D8 (One customer, one database) · **Depends on:** TopUp
 
 **Behaviour**
 
@@ -426,7 +440,7 @@ What needs somebody before this can ship, each with an owner.
 ### Closing
 
 > **Delivers:** balance refund and the end of a wallet.
-> **Status:** blocked by Load spike (#3), Refundable balance · **Applies:** D1 (Double-entry ledger), D2 (Balance stored on wallets only), D3 (Limit checked in one atomic write), D4 (Exactly once) · **Depends on:** TopUp
+> **Status:** blocked by Refundable balance · **Applies:** D1 (Double-entry ledger), D2 (Balance stored on wallets only), D3 (Limit checked in one atomic write), D4 (Exactly once) · **Depends on:** TopUp
 
 **Behaviour**
 
@@ -459,7 +473,7 @@ What needs somebody before this can ship, each with an owner.
 ### Statement
 
 > **Delivers:** balance and statement of a wallet.
-> **Status:** blocked by Load spike (#3) · **Applies:** D5 (Gapless wallet sequence), D6 (Ledger holds only money), D7 (Two years online, monthly) · **Depends on:** TopUp
+> **Status:** ready to specify · **Applies:** D5 (Gapless wallet sequence), D6 (Ledger holds only money), D7 (Two years online, monthly) · **Depends on:** TopUp
 
 **Behaviour**
 
@@ -478,15 +492,15 @@ What needs somebody before this can ship, each with an owner.
 ### Archive
 
 > **Delivers:** a month older than 2 years leaves the database whole.
-> **Status:** blocked by Load spike (#3) · **Applies:** D7 (Two years online, monthly) · **Depends on:** Statement
+> **Status:** ready to specify · **Applies:** D7 (Two years online, monthly) · **Depends on:** Statement
 
 **Behaviour**
 
 | Situation | What happens |
 |---|---|
-| Month archived | Partition dropped; each touched wallet's `archived_balance` and `archived_seq` set from its last archived entry |
-| Writes in flight while archiving | Unaffected; the spike measures it |
-| Invariant 3 after archiving | Still holds |
+| Month archived | Each touched wallet's `archived_balance` and `archived_seq` set from its last archived entry; counterpart totals added to `archived_total` and `online_from` moved in one transaction; then partitions detached and dropped |
+| Writes in flight while archiving | Unaffected: payment p99 2.5 ms while August (287k wallets) was archived in 8.2 s (#3) |
+| Invariants 3 and 5 after archiving | Still hold (#3) |
 
 **Open — defaults taken**
 
@@ -496,4 +510,4 @@ What needs somebody before this can ship, each with an owner.
 
 - `docs/research/wallet-data-model-prior-art.md` (issue #2, 2026-11-17) — prior art for D1 to D8 from Modern Treasury, Formance, Blnk, pgledger, TigerBeetle, Stripe, Square Books and Uber, with every source linked. No source covers the archive boundary; D7 is this study's own design.
 - Issue #1 — the discovery as first recorded, superseded by this document.
-- Issue #3 — the load spike.
+- Issue #3 and `spike/load/README.md` — the load spike: schema, write path, scenarios and results.
