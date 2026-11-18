@@ -1,6 +1,6 @@
 # ADR-002: Repository layout
 
-Status: proposed — Date: 2026-11-18
+Status: accepted — Date: 2026-11-18
 
 ## Context
 
