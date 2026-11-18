@@ -1,0 +1,31 @@
+pgbench (17.10 (Debian 17.10-1.pgdg13+1))
+transaction type: multiple scripts
+scaling factor: 1
+query mode: prepared
+number of clients: 32
+number of threads: 4
+maximum number of tries: 1
+duration: 60 s
+number of transactions actually processed: 472182
+number of failed transactions: 0 (0.000%)
+latency average = 4.068 ms
+initial connection time = 23.969 ms
+tps = 7865.941522 (without initial connection time)
+SQL script 1: /bench/race_payment.sql
+ - weight: 4 (targets 40.0% of total)
+ - 188617 transactions (39.9% of total, tps = 3142.115312)
+ - number of failed transactions: 0 (0.000%)
+ - latency average = 5.097 ms
+ - latency stddev = 3.443 ms
+SQL script 2: /bench/race_topup.sql
+ - weight: 3 (targets 30.0% of total)
+ - 142105 transactions (30.1% of total, tps = 2367.285538)
+ - number of failed transactions: 0 (0.000%)
+ - latency average = 5.328 ms
+ - latency stddev = 3.628 ms
+SQL script 3: /bench/dup.sql
+ - weight: 3 (targets 30.0% of total)
+ - 140876 transactions (29.8% of total, tps = 2346.811987)
+ - number of failed transactions: 0 (0.000%)
+ - latency average = 1.295 ms
+ - latency stddev = 0.663 ms

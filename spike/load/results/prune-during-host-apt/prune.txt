@@ -1,0 +1,2 @@
+NOTICE:  pruned 1801098 keys in 361 batches, 32.6 s
+Time: 32682.574 ms (00:32.683)
